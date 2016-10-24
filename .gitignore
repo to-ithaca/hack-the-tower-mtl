@@ -19,3 +19,6 @@ project/plugins/project/
 # Ensime specific
 .ensime
 .ensime_cache/
+
+#Unix specific
+*~

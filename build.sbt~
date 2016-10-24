@@ -1,6 +1,0 @@
-scalaOrganization := "org.typelevel"
-
-scalacOptions ++= Seq(
-  "-Ypartial-unification", 
-  "-Yliteral-types"
-)
