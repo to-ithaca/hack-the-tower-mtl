@@ -1,47 +1,39 @@
 # MTL workshop
 
-## Step 0 - Pure evil
+## Step 2 - Stacking Monads
 
-The code you need to refactor is that of a basic calculator. The calculator has buttons, pressed using `press`, and a visual display of expressions shown using `screen`.  Unavoidably, the code is mutable - pressing a button changes the current state.  And if you press the wrong button, the `screen` displas `ERROR` and the calculator is reset.
+Notice that lots of the functional signatures take in a `CalcState` and return a modified `CalcState`.  This indicates that our system is *stateful* - there is some state that gets modified along out functional pipeline.  Other functions take in a `CalcState` and return a `CalcError Either CalcState`.  This indicates that our system has errors - some of the operations are fallible.  The state and errors in our system are termed effects.  And for each of these effects, there is a monad. The state effect has the `State` monad and the either effect has the `Either` monad.  The monadic properties of these mean that changes can be layered on top of each other using `flatMap` operations.
 
-### Rolling up your sleeves
-Brace yourself for the task ahead.  You'll need to preserve the old implementation while you write the new one, so create an interface for all calculators.
-```
-trait Calculator {
-   def press(c: Char): Calculator
-   def screen: String
-}
-```
-The old scripted calculator should conform to this interface.  It can't keep the same name, so let's rename it to `EvilCalculator`.
-```
-class EvilCalculator extends Calculator {
-   ...
-}
-```
-Yes, it certainly lives up to it's name.
+Note that we're already using the `Either` monad.  To introduce the state monad, instead of returning a function `CalcState => CalcState`, return a `State[CalcState, Unit]`.
 
-Let's create a new `FriendlyCalculator` to contain the functional implementation.
+For example:
 ```
-class FriendlyCalculator extends Calculator {
-   def press(c: Char): Calculator = ???
-   def screen: String = ???
-}
+private def calc(i: Int)(cs: CalcState): CalcState = ???
 ```
-
-We also need to alter the tests to test both calculators.  Turn `CalculatorTests` into a trait, and create `EvilCalculatorTests` and `FriendlyCalculatorTests` inheriting from it.
+becomes
 ```
-trait CalculatorTests extends FunSpec with Matchers {
-   def calculator: Calculator
-   ...
-}
+private def calc(i: Int): State[CalcState, Unit] = ???
+```
+The function internals can then be wrapped in a `State.modify`.  This handles `calc(i: Int)`, `write` and `equals`.  
+Calculating operators has a much more difficult signature:
+```
+private def calc(o: BinOp)(cs: CalcState): ConsecutiveOpError Either CalcState = ???
+```
+This has both an `Either` and a `State` effect.  For this, we need to use a `StateT`.  This stacks a State monad on top of an Either monad, such that flatMap operates on the state / either combination.  Our full stack is:
 
-class EvilCalculatorTests extends CalculatorTests {
-   def calculator: Calculator = new EvilCalculator()
-}
+```
+type MStack[A] = StateT[CalculatorError Either ?, CalcState, A]
+```
+We're using `kind-projector` to write the stack cleanly.
 
-class FriendlyCalculatorTests extends CalculatorTests {
-   def calculator: Calculator = new FriendlyCalculator()
-}
+The states and eithers need to be lifted into this stack:
+
+```
+private def liftEither[E <: CalcError, A](e: E Either A): MStack[A] = 
+    StateT.lift(e.leftWiden[CalcError])
+
+private def liftState[A](s: State[CalcState, A]): MStack[A] = 
+    s.transformF(a => Right(a.value))
 ```
 
-The code should now compile with `sbt compile`, but the tests will fail since `FriendlyCalculator` has missing method implementations.
+The `FriendlyCalculator` can then run the stack produced by `press` to get the next state.
