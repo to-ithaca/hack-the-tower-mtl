@@ -6,7 +6,7 @@ object Operator extends Enumeration {
 }
 
 
-final class Calculator { self =>
+final class EvilCalculator extends Calculator { self =>
 
   private var _previous: Option[Int] = None
   private var _currentOperator: Operator.Value = null
