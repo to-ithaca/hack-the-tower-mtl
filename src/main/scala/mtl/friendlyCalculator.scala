@@ -30,50 +30,48 @@ object FunCalculator {
   val empty: CalcState = CalcState(Num(0), "")
 
   def press(c: Char): MStack[Unit] = for {
-    s <- liftEither(parse(c))
+    s <- parse[MStack](c)
     _ <- s match {
-      case Number(i) => liftState(calc(i) >> write(i.show))
-      case o: BinOp =>  calc(o) >> liftState(write(o.show))
-      case Equals =>  liftState(equals)
+      case Number(i) => calc[MStack](i) >> write[MStack](i.show)
+      case o: BinOp =>  calc[MStack](o) >> write[MStack](o.show)
+      case Equals =>  equals[MStack]
     }
   } yield ()
 
-  private def parse(c: Char): ParseError Either Symbol = c match {
-    case '+' => Right(Plus)
-    case '-' => Right(Minus)
-    case '=' => Right(Equals)
+  private def parse[F[_]](c: Char)(implicit M: MonadError[F, CalcError]): F[Symbol] = c match {
+    case '+' => M.pure(Plus)
+    case '-' => M.pure(Minus)
+    case '=' => M.pure(Equals)
     case o => try {
-      Right(Number(Integer.parseInt(o.toString)))
+      M.pure(Number(Integer.parseInt(o.toString)))
     } catch {
-      case e: NumberFormatException => Left(ParseError(e))
+      case e: NumberFormatException => M.raiseError(ParseError(e))
     }
   }
 
-  private def calc(i: Int): State[CalcState, Unit] = State.modify(cs =>
+  private def calc[F[_]](i: Int)(implicit M: MonadState[F, CalcState]): F[Unit] = M.modify(cs =>
     cs.copy(expr = cs.expr match {
       case Num(c) => Num(c * 10 + i)
       case NumOp(p, o) => NumOpNum(p, o, i)
       case NumOpNum(p, o, c) => NumOpNum(p, o, c * 10 + i)
     }))
 
-  private def calc(o: BinOp): MStack[Unit] = for {
-    cs <- liftState(State.get)
-    _ <- cs.expr match {
-      case Num(n) =>  liftState(State.set(cs.copy(expr = NumOp(n, o))))
-      case NumOp(n, p) => liftEither(Left(ConsecutiveOpError(p, o)))
-      case NumOpNum(p, po, n) => liftState(State.set(cs.copy(expr = NumOp(binop(p, po, n), o))))
-    }
-  } yield ()
+  private def calc[F[_]](o: BinOp)(implicit ME: MonadError[F, CalcError], MS: MonadState[F, CalcState]): F[Unit] = MS.flatMap(MS.get) { cs =>
+    cs.expr match {
+      case Num(n) =>  MS.set(cs.copy(expr = NumOp(n, o)))
+      case NumOp(n, p) => ME.raiseError(ConsecutiveOpError(p, o))
+      case NumOpNum(p, po, n) => MS.set(cs.copy(expr = NumOp(binop(p, po, n), o)))
+    }}
 
   private def binop(p: Int, o: BinOp, n: Int): Int = o match {
     case Plus => p + n
     case Minus => p - n
   }
 
-  private def write(s: String): State[CalcState, Unit] = State.modify(cs => 
-    cs.copy(display = cs.display + s))
+  private def write[F[_]](s: String)(implicit M: MonadState[F, CalcState]): F[Unit] = 
+    M.modify(cs => cs.copy(display = cs.display + s))
 
-  private def equals: State[CalcState, Unit] = State.modify { cs =>
+  private def equals[F[_]](implicit M: MonadState[F, CalcState]): F[Unit] = M.modify { cs =>
     val value = cs.expr match {
       case Num(i) => i
       case NumOp(p, o) => binop(p, o, 0)
@@ -82,11 +80,6 @@ object FunCalculator {
     CalcState(Num(value), value.show)
   }
 
-  private def liftEither[E <: CalcError, A](e: E Either A): MStack[A] =
-    StateT.lift(e.leftWiden[CalcError])
-
-  private def liftState[A](s: State[CalcState, A]): MStack[A] =
-    s.transformF(a => Right(a.value))
 }
 
 sealed trait Symbol
