@@ -170,6 +170,21 @@ class FriendlyCalculator extends Calculator {
 }
 
 ```
+class FriendlyCalculator extends Calculator {
+
+  private var _state: CalcState = FunCalculator.empty 
+  private var _screen: String = ""
+
+  def press(c: Char): Calculator = FunCalculator.press(c)(_state) match {
+    case Right(next) => 
+      _state = next
+      _screen = next.display
+      this
+    case Left(_) =>
+      _state = FunCalculator.empty
+      _screen = "ERROR"
+      this
+  }
 
 ### Next Steps
 
