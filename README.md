@@ -1,39 +1,151 @@
 # MTL workshop
 
-## Step 2 - Stacking Monads
+## Step 3 - Monad Transformer Library
+You're almost done!
 
-Notice that lots of the functional signatures take in a `CalcState` and return a modified `CalcState`.  This indicates that our system is *stateful* - there is some state that gets modified along out functional pipeline.  Other functions take in a `CalcState` and return a `CalcError Either CalcState`.  This indicates that our system has errors - some of the operations are fallible.  The state and errors in our system are termed effects.  And for each of these effects, there is a monad. The state effect has the `State` monad and the either effect has the `Either` monad.  The monadic properties of these mean that changes can be layered on top of each other using `flatMap` operations.
+The next section describes how to take functions defined on a concrete monad stack and parameterize them using MTL style programming.  MTL is a really cool application of parametricity, and is just an extension of everything we've been doing up to this point.
 
-Note that we're already using the `Either` monad.  To introduce the state monad, instead of returning a function `CalcState => CalcState`, return a `State[CalcState, Unit]`.
+### Watch this space
+The MTL style in cats is still in development, and is likely to have several enhancements over the coming months.  It's likely that the finished style will be a bit different to the one described here.  
 
-For example:
-```
-private def calc(i: Int)(cs: CalcState): CalcState = ???
-```
-becomes
-```
-private def calc(i: Int): State[CalcState, Unit] = ???
-```
-The function internals can then be wrapped in a `State.modify`.  This handles `calc(i: Int)`, `write` and `equals`.  
-Calculating operators has a much more difficult signature:
-```
-private def calc(o: BinOp)(cs: CalcState): ConsecutiveOpError Either CalcState = ???
-```
-This has both an `Either` and a `State` effect.  For this, we need to use a `StateT`.  This stacks a State monad on top of an Either monad, such that flatMap operates on the state / either combination.  Our full stack is:
+### Stacked too high
+Our program now has a single high level monad stack, aliased `MStack`, which encompases both `State` and `Either` like behaviour.  If this was a commercial application, this would be a small part of a much larger stack, which would most likely have other aspects.  We may want to read a calculator format from a `Config` using a `Reader` monad, or collect logs with a `Writer` monad.  Our final stack may be very large, and we would have to take a lot of effort lifting functions into the stack.
 
-```
-type MStack[A] = StateT[CalculatorError Either ?, CalcState, A]
-```
-We're using `kind-projector` to write the stack cleanly.
+Our functions shouldn't actually care about the stack we use for our wider application.  They only need to know that that stack has `State` and `Either` like behaviour.  If we could somehow parameterize our functions on our stack, we wouldn't have to lift them in, or reference a concrete stack at all.  
 
-The states and eithers need to be lifted into this stack:
+*This is what Monad Transformer Library is for*.
 
-```
-private def liftEither[E <: CalcError, A](e: E Either A): MStack[A] = 
-    StateT.lift(e.leftWiden[CalcError])
+MTL allows us to parameterize functions on monad stacks.  Provided a stack has the required behaviour, we can use it in a function.
 
-private def liftState[A](s: State[CalcState, A]): MStack[A] = 
-    s.transformF(a => Right(a.value))
+Let's take the equals function as a simple example:
+```scala
+def equals: State[CalcState, Unit] = ???
 ```
 
-The `FriendlyCalculator` can then run the stack produced by `press` to get the next state.
+`equals` currently returns `State`, but we can make it return an arbitrary stack `F[_]` provided that `F` has stateful properties:
+```scala
+def equals[F[_]](implicit M: MonadState[F, CalcState]): F[Unit] = ???
+```
+
+If we call `equals[State[CalcState, ?]]`, we get a `State` back.
+We could also call `equals[MStack]` and get an `MStack` back.
+
+### The MonadState
+We're going to rewrite `calc(i: Int)`, `equals` and `write` using the `MonadState`.  Take a look at the cats code - you'll notice that the `MonadState` is actually pretty simple.
+It has a few base methods:
+
+ - `get`
+ - `set`
+
+From these we can derive `inspect` and `modify`.
+It inherits a few methods from `Monad`:
+
+ - `pure`
+ - `flatMap`
+ - `map`
+
+Let's write `calc(i: Int)` in terms of these:
+```scala
+private def calc[F[_]](i: Int)(implicit M: MonadState[F, CalcState]): F[Unit] = M.modify(cs =>
+    cs.copy(expr = cs.expr match {
+      case Num(c) => Num(c * 10 + i)
+      case NumOp(p, o) => NumOpNum(p, o, i)
+      case NumOpNum(p, o, c) => NumOpNum(p, o, c * 10 + i)
+}))
+```
+It's pretty much the same as before, but we use `M.modify` instead of `State.modify`.
+
+Write `write` in terms of the `MonadState`:
+```scala
+private def write[F[_]](s: String)(implicit M: MonadState[F, CalcState]): F[Unit] = 
+  M.modify(cs => cs.copy(display = cs.display + s))
+```
+
+Write `equals` in terms of the `MonadState`:
+```scala
+  private def equals[F[_]](implicit M: MonadState[F, CalcState]): F[Unit] = M.modify { cs =>
+    val value = cs.expr match {
+      case Num(i) => i
+      case NumOp(p, o) => binop(p, o, 0)
+      case NumOpNum(p, o, n) => binop(p, o, n)
+    }
+    CalcState(Num(value), value.show)
+}
+```
+
+### The MonadError
+The `MonadError` is an MTL typeclass representing failure handling.  It's also a fairly simple typeclass.
+
+ - It has a method `raiseError` for raising errors into the stack.
+ - It inherits `pure`, `flatMap` and `map` from `Monad`.
+
+Write `parse` in terms of the `MonadError`:
+```scala
+ private def parse[F[_]](c: Char)(implicit M: MonadError[F, CalcError]): F[Symbol] = c match {
+    case '+' => M.pure(Plus)
+    case '-' => M.pure(Minus)
+    case '=' => M.pure(Equals)
+    case o => try {
+      M.pure(Number(Integer.parseInt(o.toString)))
+    } catch {
+      case e: NumberFormatException => M.raiseError(ParseError(e))
+    }
+}
+```
+### Stacking MTL
+We now need to parameterize `calc(o: BinOp)` on a monad stack.  The signature itself is easy to craft.
+We need to have both a `MonadState` and a `MonadError` typeclass.
+```scala
+ private def calc[F[_]](o: BinOp)(implicit ME: MonadError[F, CalcError],
+                                           MS: MonadState[F, CalcState]): F[Unit] = ???
+```
+Let's try:
+```scala
+ private def calc[F[_]](o: BinOp)(implicit ME: MonadError[F, CalcError],
+                                            MS: MonadState[F, CalcState]): F[Unit] =
+   MS.get.flatMap(cs =>
+    cs.expr match {
+      case Num(n) =>  MS.set(cs.copy(expr = NumOp(n, o)))
+      case NumOp(n, p) => ME.raiseError(ConsecutiveOpError(p, o))
+      case NumOpNum(p, po, n) => MS.set(cs.copy(expr = NumOp(binop(p, po, n), o)))
+    })
+```
+Unfortunately, this has **ambiguous implicits** for `flatMap` - both the `MonadError` and `MonadState` provide implicit conversions for `flatMap`, and the scala compiler doesn't know which one to use.  We have to pick one by calling `flatMap` explicity from a typeclass:
+```scala
+private def calc[F[_]](o: BinOp)(implicit ME: MonadError[F, CalcError], 
+                                            MS: MonadState[F, CalcState]): F[Unit] =
+   MS.flatMap(MS.get) ( cs =>
+    cs.expr match {
+      case Num(n) =>  MS.set(cs.copy(expr = NumOp(n, o)))
+      case NumOp(n, p) => ME.raiseError(ConsecutiveOpError(p, o))
+      case NumOpNum(p, po, n) => MS.set(cs.copy(expr = NumOp(binop(p, po, n), o)))
+    })
+```
+This isn't too bad for our code, but for large, nested flatMaps, it can get very ugly.  This is an issue with the way typeclasses are coded in cats, and there is much discussion on the solution.  Until then, explicit `flatMap` calls are the best way to go.
+
+Let's finally write `press` on a concrete stack by passing `MStack` as a type parameter to our functions:
+```scala
+ def press(c: Char): MStack[Unit] = for {
+    s <- parse[MStack](c)
+    _ <- s match {
+      case Number(i) => calc[MStack](i) >> write[MStack](i.show)
+      case o: BinOp =>  calc[MStack](o) >> write[MStack](o.show)
+      case Equals =>  equals[MStack]
+    }
+} yield ()
+```
+
+And voila! We finally have a functional MTL-style calculator!
+
+### Summary
+In this step you should have:
+
+ 1. Learned how to parameterise features, such as state and error handling, using MTL
+ 2. Learned how to use mutliple MTL typeclasses together for combinations of effects
+
+### And Finally
+Checkout step 4 to take a look at the finished code:
+
+```bash
+git checkout -f step-4-extras
+```
