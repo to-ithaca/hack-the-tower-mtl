@@ -9,6 +9,6 @@ scalaVersion := "2.11.8"
 
 libraryDependencies ++= Seq(
   "org.scalatest" %% "scalatest" % "3.0.0" % "test",
-  "org.typelevel" %% "cats-core" % "0.7.2"
+  "org.typelevel" %% "cats-core" % "0.8.0"
 )
 addCompilerPlugin("org.spire-math" %% "kind-projector" % "0.9.2")
