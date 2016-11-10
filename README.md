@@ -27,3 +27,8 @@ This project uses [typelevel scala](https://github.com/typelevel/scala) which is
 You've inherited a code base from a collegue who has long since vanished to find his true calling as a clojure developer. The code base was half scripted and half object oriented since it was written in 2012 (and by a clojure developer). It's now 2016 and functional programming is in vogue you've been asked by your skeptical colleagues to show them the error of their ways and the practical benefits of burritos and monads, concepts you've been preaching for the past 3 weeks.
 
 Undeterred you step into this brave new world...
+
+Checkout step-0 to continue
+```bash
+git checkout -f step-0-pure-evil
+```
